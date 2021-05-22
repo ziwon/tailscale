@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -2626,30 +2627,36 @@ func (b *LocalBackend) CheckIPForwarding() error {
 		return fmt.Errorf("Subnet routing and exit nodes only work with additional manual configuration on %v, and is not currently officially supported.", runtime.GOOS)
 	}
 
-	var keys []string
+	var keys [][]string
 
 	if runtime.GOOS == "linux" {
-		keys = append(keys, "net.ipv4.ip_forward", "net.ipv6.conf.all.forwarding")
+		keys = append(keys, []string{"net", "ipv4", "ip_forward"},
+			[]string{"net", "ipv6", "conf", "all", "forwarding"})
 	} else if isBSD(runtime.GOOS) {
-		keys = append(keys, "net.inet.ip.forwarding")
+		keys = append(keys, []string{"net", "inet", "ip", "forwarding"})
 	} else {
 		return nil
 	}
 
 	for _, key := range keys {
-		bs, err := exec.Command("sysctl", "-n", key).Output()
+		procfile := "/proc/sys/" + strings.Join(key, "/")
+		bs, err := ioutil.ReadFile(procfile)
+		if err != nil {
+			sysctlName := strings.Join(key, ".")
+			bs, err = exec.Command("sysctl", "-n", sysctlName).Output()
+		}
 		if err != nil {
 			//lint:ignore ST1005 output to users as is
-			return fmt.Errorf("couldn't check %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+			return fmt.Errorf("couldn't check %v (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		}
 		on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
 		if err != nil {
 			//lint:ignore ST1005 output to users as is
-			return fmt.Errorf("couldn't parse %s (%v).\nSubnet routes won't work without IP forwarding.", key, err)
+			return fmt.Errorf("couldn't parse %v (%v).\nSubnet routes won't work without IP forwarding.", key, err)
 		}
 		if !on {
 			//lint:ignore ST1005 output to users as is
-			return fmt.Errorf("%s is disabled. Subnet routes won't work.", key)
+			return fmt.Errorf("%v is disabled. Subnet routes won't work.", key)
 		}
 	}
 	return nil
