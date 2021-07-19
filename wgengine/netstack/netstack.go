@@ -42,7 +42,7 @@ import (
 	"tailscale.com/wgengine/magicsock"
 )
 
-const debugNetstack = false
+const debugNetstack = true
 
 // Impl contains the state for the netstack implementation,
 // and implements wgengine.FakeImpl to act as a userspace network
@@ -164,7 +164,24 @@ func (ns *Impl) Start() error {
 		}
 		return tcpFwd.HandlePacket(tei, pb)
 	})
-	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
+	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, func(tei stack.TransportEndpointID, pb *stack.PacketBuffer) bool {
+		addr := tei.LocalAddress
+		var pn tcpip.NetworkProtocolNumber
+		if addr.To4() != "" {
+			pn = ipv4.ProtocolNumber
+		} else {
+			pn = ipv6.ProtocolNumber
+		}
+		ip, ok := netaddr.FromStdIP(net.IP(addr))
+		if !ok {
+			ns.logf("netstack: could not parse local address %s for incoming UDP connection", ip)
+			return false
+		}
+		if !ns.isLocalIP(ip) {
+			ns.addSubnetAddress(pn, ip)
+		}
+		return udpFwd.HandlePacket(tei, pb)
+	})
 	go ns.injectOutbound()
 	ns.tundev.PostFilterIn = ns.injectInbound
 	return nil
@@ -556,14 +573,16 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	}
 	localAddr, err := ep.GetLocalAddress()
 	if err != nil {
+		ns.logf("acceptUDP: ep.GetLocalAddress failed")
 		return
 	}
 	remoteAddr, err := ep.GetRemoteAddress()
 	if err != nil {
+		ns.logf("acceptUDP: ep.GetRemoteAddress failed")
 		return
 	}
 	c := gonet.NewUDPConn(ns.ipstack, &wq, ep)
-	go ns.forwardUDP(c, &wq, localAddr, remoteAddr)
+	ns.forwardUDP(c, &wq, localAddr, remoteAddr)
 }
 
 func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientLocalAddr, clientRemoteAddr tcpip.FullAddress) {
@@ -599,12 +618,13 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientLocalA
 	extend := func() {
 		timer.Reset(2 * time.Minute)
 	}
+	ns.logf("netstack: startPacketCopy %v:%v", clientRemoteAddr.Addr.String(), clientRemoteAddr.Port)
 	startPacketCopy(ctx, cancel, client, &net.UDPAddr{
 		IP:   net.ParseIP(clientRemoteAddr.Addr.String()),
 		Port: int(clientRemoteAddr.Port),
 	}, backendConn, ns.logf, extend)
+	ns.logf("netstack: startPacketCopy %v:%v", backendRemoteAddr.IP, backendRemoteAddr.Port)
 	startPacketCopy(ctx, cancel, backendConn, backendRemoteAddr, client, ns.logf, extend)
-
 }
 
 func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.PacketConn, dstAddr net.Addr, src net.PacketConn, logf logger.Logf, extend func()) {
