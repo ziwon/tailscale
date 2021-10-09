@@ -8,14 +8,17 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
@@ -275,7 +278,16 @@ func (m *directManager) rename(old, new string) error {
 		return fmt.Errorf("writing to %q in rename of %q: %v", new, old, err)
 	}
 	if err := m.fs.Remove(old); err != nil {
-		return fmt.Errorf("removing %q after rename to %q: %v", old, new, err)
+		if errors.Is(err, &fs.PathError{Err: syscall.EBUSY}) {
+			return fmt.Errorf("removing %q after rename to %q: %v %T", old, new, err, err)
+		}
+
+		// This happens in certain container environments as well, we can't remove
+		// the file because it is busy. So we just truncate it.
+		err = m.fs.Truncate(old, 0)
+		if err != nil {
+			return fmt.Errorf("truncate %q after rename to %q: %v", old, new, err)
+		}
 	}
 	return nil
 }
@@ -407,6 +419,7 @@ type wholeFileFS interface {
 	Rename(oldName, newName string) error
 	Remove(name string) error
 	ReadFile(name string) ([]byte, error)
+	Truncate(name string, size int64) error
 	WriteFile(name string, contents []byte, perm os.FileMode) error
 }
 
@@ -437,6 +450,10 @@ func (fs directFS) Remove(name string) error { return os.Remove(fs.path(name)) }
 
 func (fs directFS) ReadFile(name string) ([]byte, error) {
 	return ioutil.ReadFile(fs.path(name))
+}
+
+func (fs directFS) Truncate(name string, size int64) error {
+	return os.Truncate(fs.path(name), size)
 }
 
 func (fs directFS) WriteFile(name string, contents []byte, perm os.FileMode) error {

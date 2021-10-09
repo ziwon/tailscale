@@ -6,8 +6,12 @@ package dns
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 
 	"inet.af/netaddr"
@@ -100,4 +104,27 @@ search ts.net ts-dns.test
 		t.Fatal(err)
 	}
 	assertBaseState(t)
+}
+
+type brokenRemoveFS struct {
+	directFS
+}
+
+func (b brokenRemoveFS) Rename(old, new string) error {
+	return errors.New("nyaaah I'm a silly container!")
+}
+
+func (b brokenRemoveFS) Remove(name string) error {
+	if strings.Contains(name, "/etc/resolv.conf") {
+		return fmt.Errorf("Faking remove failure: %q", &fs.PathError{Err: syscall.EBUSY})
+	}
+	return b.directFS.Remove(name)
+}
+
+func TestDirectBrokenRemove(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "etc"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	testDirect(t, brokenRemoveFS{directFS{prefix: tmp}})
 }
