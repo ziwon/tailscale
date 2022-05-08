@@ -459,6 +459,7 @@ func (s *dnsTCPSession) handleReads() {
 			case <-s.ctx.Done():
 				return
 			default:
+				s.m.logf("handleReads DNS from %v", s.conn.RemoteAddr())
 				go s.handleQuery(buf)
 			}
 		}
@@ -547,6 +548,7 @@ func (m *Manager) HandleDNSoverTLSConn(conn net.Conn, srcAddr netaddr.IPPort) {
 	tlsConn := tls.Server(conn, &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 	})
+	m.logf("HandleDNSoverTLSConn: new connection %v", tlsConn.RemoteAddr())
 	m.HandleTCPConn(tlsConn, srcAddr)
 }
 
