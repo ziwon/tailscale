@@ -55,6 +55,9 @@ var (
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
+
+	enableStunIPv4 = flag.Bool("stun-ipv4", true, "whether to enable IPv4 to serve STUN")
+	enableStunIPv6 = flag.Bool("stun-ipv6", true, "whether to enable IPv6 to serve STUN")
 )
 
 var (
@@ -360,9 +363,9 @@ func serverSTUNListener(ctx context.Context, pc *net.UDPConn) {
 			stunNotSTUN.Add(1)
 			continue
 		}
-		if ua.IP.To4() != nil {
+		if *enableStunIPv4 == true && ua.IP.To4() != nil {
 			stunIPv4.Add(1)
-		} else {
+		} else if *enableStunIPv6 == true && ua.IP.To4() == nil {
 			stunIPv6.Add(1)
 		}
 		res := stun.Response(txid, ua.IP, uint16(ua.Port))
